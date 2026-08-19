@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this lab or its findings, please cite it as below."
+title: "Self-Defeating Audits: Reversible Auditor-Blinding and Attribution Poisoning by a Low-Privilege Role in Trigger-Based PostgreSQL Auditing"
+authors:
+  - family-names: "Munirathinam"
+    given-names: "Thamilvendhan"
+type: software
+license: MIT
+repository-code: "https://github.com/mthamil107/DB_Audit_Research"
+abstract: >-
+  A reproducible defensive-security lab testing whether a low-privilege,
+  injection-only PostgreSQL role can reversibly blind a trigger-based auditor
+  and poison attribution on stock PostgreSQL, and evaluating defenses. The
+  feasibility matrix is reproduced on PostgreSQL 14 and 16 with entirely
+  synthetic data. Individual primitives (CVE-2018-1058 search_path shadowing,
+  SECURITY DEFINER escalation) are prior art; the contribution is their
+  composition into a self-defeating-audit threat model at application privilege,
+  plus an executed defense evaluation.
+keywords:
+  - database security
+  - audit integrity
+  - anti-forensics
+  - PostgreSQL
+  - search_path
+  - CVE-2018-1058
+  - tamper-evident logging
+  - attribution
