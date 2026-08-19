@@ -13,6 +13,9 @@ identifiers:
     value: 10.5281/zenodo.22004478
     description: "Concept DOI (all versions)"
   - type: doi
+    value: 10.5281/zenodo.22011895
+    description: "Version v5 DOI (adversarial-review corrections) — current"
+  - type: doi
     value: 10.5281/zenodo.22011492
     description: "Version v4 DOI (three-engine + LaTeX PDF + source) — current"
   - type: doi
