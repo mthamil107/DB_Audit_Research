@@ -26,10 +26,26 @@ behavior) splits cleanly:
 
 | Vector | Blinds a write? | Precondition it truly needs |
 |---|---|---|
-| **1A** plain `search_path` shadow of a `pg_catalog` built-in | **No** | Even with `evil` prepended, `pg_catalog` is resolved first for a same-name/same-signature built-in; and the app role can't even `CREATE SCHEMA` without `CREATE`-on-database. |
-| **1B** exact composite-type overload `public.row_to_json(app.accounts)` | **Yes** | **Writable `public` (PUBLIC has CREATE) AND an unpinned trigger `search_path`.** The exact rowtype overload is a *more specific* match than the generic `row_to_json(record)` built-in, so type-specificity beats `pg_catalog`'s search-order priority. |
-| **1C** replace the trigger function body | **Yes** | The app role **owns / can `ALTER`** the audit function (ownership misconfig). |
-| **1D** `SECURITY DEFINER` *helper* with mutable path | **N/A here** | No such bespoke helper exists in this victim beyond the built-ins covered by 1A/1B. |
+| **1A** plant a shadow in a *new* schema `evil` | **No — blocked at setup** | The app role **cannot `CREATE SCHEMA`** without `CREATE`-on-database, so no shadow is ever planted. *This is a privilege barrier, not a name-resolution fact* — see the corrected note below. |
+| **1S** same-signature `public.row_to_json(record)`, `public` before `pg_catalog` | **Yes (payload-nulled)** | Writable `public` + unpinned trigger path. Plain CVE-2018-1058 schema-ordering: a like-named object in an earlier schema shadows the built-in. |
+| **1T** exact overload `public.row_to_json(app.accounts)`, **`pg_catalog` explicitly first** | **Yes (payload-nulled)** | Writable `public` + unpinned path. Isolates *type-specificity*: the exact rowtype overload beats the generic `row_to_json(record)` built-in **even when `pg_catalog` is searched first** — best-type-match precedes schema-order tie-breaking. |
+| **1B** exact overload with `public` first | **Yes (payload-nulled)** | The convenience case combining both (writable `public`, unpinned path). |
+| **1C** replace the trigger function body | **Yes (no record at all)** | The app role **owns / can `ALTER`** the audit function (ownership misconfig). |
+| **1D** `SECURITY DEFINER` *helper* with mutable path | **N/A here** | No such bespoke helper exists in this victim beyond the built-ins covered above. |
+
+**Corrected 1A note (this replaces an earlier, wrong explanation).** An earlier draft said 1A
+fails because "`pg_catalog` is resolved first, so a same-name built-in cannot be shadowed."
+**That is wrong and contradicts CVE-2018-1058** — a like-named object in a schema that *precedes*
+`pg_catalog` on the path *does* shadow the built-in. The empirical truth (evidence logs): 1A fails
+only because a fresh role cannot `CREATE SCHEMA` (privilege barrier). When the attacker instead
+plants into the already-writable `public` schema, shadowing **succeeds** — demonstrated by **1S**
+(same-signature, schema-ordering) and, more strongly, **1T** (exact overload beats the built-in
+even with `pg_catalog` first, isolating type-specificity).
+
+**Two kinds of "blinding" — do not conflate.** The overload vectors (1S/1T/1B) make
+`row_to_json` return `NULL`, so an audit row is **still written** (correct `changed_by`, IP,
+timestamp) but with a **null payload** — *payload-nulling*. Vector 1C leaves **no audit row at
+all**. Both defeat payload capture; only 1C defeats the fact-of-a-write.
 
 **The decisive version nuance (verified):**
 - Stock **PostgreSQL 14**: a fresh low-privilege role **can** `CREATE` in `public` by
@@ -60,8 +76,25 @@ What still betrays it, even after a perfect body restore:
 - the **DDL event-trigger guard** recorded **2** `CREATE OR REPLACE FUNCTION` events on
   `audit.if_modified` (blind + restore).
 
-So RQ2's lesson: **object-diffing the audit code is insufficient; you need an
-out-of-band write counter and a DDL event log.**
+**Negative control (1R2) — semantic restore *is* detectable.** A careless attacker who
+restores a *behaviourally-identical but reformatted* body (rather than replaying captured
+bytes) leaves a **different `pg_proc.prosrc`**: the function md5 changes (measured:
+`66cf56bc… → bab9fc81…`), so an object diff **catches** it. This isolates the earlier claim: it
+is specifically the *verbatim capture-and-replay* (1C) that defeats object-diffing, not restoration
+in general. So the reversibility result is not a tautology — it is the contrast between 1C (clean)
+and 1R2 (detected).
+
+So RQ2's lesson: **object-diffing the audit code catches a naive restore but is defeated by a
+verbatim replay; you therefore also need an out-of-band write counter and a DDL event log.**
+
+> **Significance framing (honest).** Only the **overload class (1S/1T/1B)** bites a role holding
+> nothing but application privileges, and only on a *writable `public`* (stock on PostgreSQL ≤14;
+> a misconfiguration on 15+). **1C, RQ3, and RQ4 all presuppose an audit-object misconfiguration**
+> — the app role already **owns/can `ALTER`** the audit function or can **`INSERT`** into the audit
+> table. Their contribution is therefore not "tampering is possible" (that is expected once you
+> control the auditor) but *what that misconfiguration additionally unlocks*: **reversibility with a
+> clean object-diff, session-gated dormancy, and forensically-indistinguishable attribution
+> poisoning** — plus how detectable each is, which differs sharply across engines (next section).
 
 ### RQ3 — Dormant, GUC-gated bypass
 

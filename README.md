@@ -52,6 +52,15 @@ cd scripts/mssql
 ./run_matrix_mssql.sh        # -> results/RESULTS_mssql.md ; then ./teardown.sh
 ```
 
+> **Reproducibility caveat (SQL Server).** Unlike the Docker engines, the SQL Server third
+> has a **host dependency**: it runs on a local **SQL Server LocalDB** instance via
+> `sqlcmd` (path hardcoded in `run_matrix_mssql.sh`), so it is Windows-only and cannot be
+> pinned to an image digest. The low-privilege attacker is modelled with `EXECUTE AS USER`
+> impersonation (LocalDB is Windows-auth only). The engine-behaviour findings (DISABLE
+> zero-residue; DDL guard misses DISABLE) are independent of session type and would hold for
+> a real login; the object-grant findings are enforced faithfully by impersonation. It is the
+> least portable of the three engines — noted honestly.
+
 Headline cross-engine result: the `search_path` shadow class (1A/1B) **transfers to
 neither** MySQL nor SQL Server (no `search_path`), but trigger-replacement, dormant
 bypass, and attribution poisoning do. MySQL's `DEFINER`-privilege binding makes blinding
@@ -80,7 +89,7 @@ comparison in `FINDINGS.md`.
 
 ## Headline result
 
-- **1A** plain catalog shadowing — **fails** (as predicted; `pg_catalog` wins).
+- **1A** planting a shadow in a *new* schema — **fails at setup** (a fresh role can't `CREATE SCHEMA`), *not* because "pg_catalog wins". Planting into the already-writable `public` **does** shadow: **1S** (same-signature, schema-ordering) and **1T** (exact overload beats the built-in *even with `pg_catalog` first* — isolates type-specificity) both blind (payload-nulled).
 - **1B** exact composite-type `row_to_json` overload — **blinds** the auditor when
   `public` is writable and the trigger `search_path` is unpinned. **Reachable on stock
   PostgreSQL ≤14; misconfiguration-gated on 15+.** Pinning `search_path` defeats it everywhere.

@@ -1,8 +1,8 @@
 NOTICE:  database "stockcheck" does not exist, skipping
 DROP DATABASE
 CREATE DATABASE
-DROP ROLE
 NOTICE:  role "probe_role" does not exist, skipping
+DROP ROLE
 CREATE ROLE
 DROP DATABASE
 DROP ROLE
@@ -11,10 +11,8 @@ You are now connected to database "postgres" as user "postgres".
 ----------------------
 (0 rows)
 
-psql:<stdin>:29: NOTICE:  database "labdb" does not exist, skipping
 DROP DATABASE
 CREATE DATABASE
-psql:<stdin>:33: NOTICE:  role "app_role" does not exist, skipping
 DROP ROLE
 CREATE ROLE
 You are now connected to database "labdb" as user "postgres".
@@ -84,11 +82,11 @@ INSERT 0 1
 
 
 --- ATTACK run_1A=on ---
-psql:<stdin>:33: ERROR:  permission denied for database labdb
 You are now connected to database "labdb" as user "app_role".
 >>> Vector 1A: planting evil.row_to_json and prepending it to search_path
+psql:<stdin>:36: ERROR:  permission denied for database labdb
 SET
-psql:<stdin>:37: ERROR:  schema "evil" does not exist
+psql:<stdin>:40: ERROR:  schema "evil" does not exist
 INSERT 0 1
 
 === BUILD VICTIM pub=off pin=on owns=off ===
@@ -133,9 +131,9 @@ INSERT 0 1
 --- ATTACK run_1A=on ---
 You are now connected to database "labdb" as user "app_role".
 >>> Vector 1A: planting evil.row_to_json and prepending it to search_path
-psql:<stdin>:33: ERROR:  permission denied for database labdb
+psql:<stdin>:36: ERROR:  permission denied for database labdb
 SET
-psql:<stdin>:37: ERROR:  schema "evil" does not exist
+psql:<stdin>:40: ERROR:  schema "evil" does not exist
 INSERT 0 1
 
 === BUILD VICTIM pub=off pin=off owns=off ===
@@ -179,7 +177,7 @@ INSERT 0 1
 --- ATTACK run_1B=on ---
 You are now connected to database "labdb" as user "app_role".
 >>> Vector 1B: planting the EXACT composite-type overload public.row_to_json(app.accounts)
-psql:<stdin>:55: ERROR:  permission denied for schema public
+psql:<stdin>:58: ERROR:  permission denied for schema public
 SET
 INSERT 0 1
 
@@ -274,6 +272,96 @@ CREATE FUNCTION
 SET
 INSERT 0 1
 
+=== BUILD VICTIM pub=on pin=off owns=off ===
+You are now connected to database "postgres" as user "postgres".
+ pg_terminate_backend 
+----------------------
+(0 rows)
+
+DROP DATABASE
+CREATE DATABASE
+DROP ROLE
+CREATE ROLE
+You are now connected to database "labdb" as user "postgres".
+CREATE SCHEMA
+CREATE TABLE
+CREATE SCHEMA
+CREATE TABLE
+CREATE FUNCTION
+CREATE TRIGGER
+GRANT
+GRANT
+GRANT
+GRANT
+   ?column?   | pub_create | pin_path | app_owns 
+--------------+------------+----------+----------
+ VICTIM_STATE | on         | off      | off
+(1 row)
+
+           tag            | app_can_create_public 
+--------------------------+-----------------------
+ PUBLIC_ACL_DEFAULT_CHECK | t
+(1 row)
+
+INSERT 0 1
+         tag          | n 
+----------------------+---
+ BASELINE_AUDIT_COUNT | 1
+(1 row)
+
+
+--- ATTACK run_1S=on ---
+You are now connected to database "labdb" as user "app_role".
+>>> Vector 1S: same-signature public.row_to_json(record), public BEFORE pg_catalog
+CREATE FUNCTION
+SET
+INSERT 0 1
+
+=== BUILD VICTIM pub=on pin=off owns=off ===
+You are now connected to database "postgres" as user "postgres".
+ pg_terminate_backend 
+----------------------
+(0 rows)
+
+DROP DATABASE
+CREATE DATABASE
+DROP ROLE
+CREATE ROLE
+You are now connected to database "labdb" as user "postgres".
+CREATE SCHEMA
+CREATE TABLE
+CREATE SCHEMA
+CREATE TABLE
+CREATE FUNCTION
+CREATE TRIGGER
+GRANT
+GRANT
+GRANT
+GRANT
+   ?column?   | pub_create | pin_path | app_owns 
+--------------+------------+----------+----------
+ VICTIM_STATE | on         | off      | off
+(1 row)
+
+           tag            | app_can_create_public 
+--------------------------+-----------------------
+ PUBLIC_ACL_DEFAULT_CHECK | t
+(1 row)
+
+INSERT 0 1
+         tag          | n 
+----------------------+---
+ BASELINE_AUDIT_COUNT | 1
+(1 row)
+
+
+--- ATTACK run_1T=on ---
+You are now connected to database "labdb" as user "app_role".
+>>> Vector 1T: exact overload public.row_to_json(app.accounts), pg_catalog FIRST
+CREATE FUNCTION
+SET
+INSERT 0 1
+
 === BUILD VICTIM pub=off pin=off owns=on ===
 You are now connected to database "postgres" as user "postgres".
  pg_terminate_backend 
@@ -319,8 +407,8 @@ You are now connected to database "labdb" as user "postgres".
 CREATE TABLE
 CREATE FUNCTION
 CREATE FUNCTION
-psql:<stdin>:43: NOTICE:  event trigger "audit_ddl_guard" does not exist, skipping
 DROP EVENT TRIGGER
+psql:<stdin>:43: NOTICE:  event trigger "audit_ddl_guard" does not exist, skipping
 CREATE EVENT TRIGGER
 CREATE TABLE
 CREATE FUNCTION
@@ -336,6 +424,56 @@ CREATE EXTENSION
 You are now connected to database "labdb" as user "app_role".
 >>> Vector 1C: capture original def, replace with no-op, blind a write, then replay original VERBATIM
 SELECT 1
+CREATE FUNCTION
+INSERT 0 1
+CREATE FUNCTION
+INSERT 0 1
+
+=== BUILD VICTIM pub=off pin=off owns=on ===
+You are now connected to database "postgres" as user "postgres".
+ pg_terminate_backend 
+----------------------
+(0 rows)
+
+DROP DATABASE
+CREATE DATABASE
+DROP ROLE
+CREATE ROLE
+You are now connected to database "labdb" as user "postgres".
+CREATE SCHEMA
+CREATE TABLE
+CREATE SCHEMA
+CREATE TABLE
+CREATE FUNCTION
+CREATE TRIGGER
+GRANT
+GRANT
+GRANT
+REVOKE
+ALTER FUNCTION
+GRANT
+GRANT
+GRANT
+   ?column?   | pub_create | pin_path | app_owns 
+--------------+------------+----------+----------
+ VICTIM_STATE | off        | off      | on
+(1 row)
+
+           tag            | app_can_create_public 
+--------------------------+-----------------------
+ PUBLIC_ACL_DEFAULT_CHECK | f
+(1 row)
+
+INSERT 0 1
+         tag          | n 
+----------------------+---
+ BASELINE_AUDIT_COUNT | 1
+(1 row)
+
+
+--- ATTACK run_1R2=on ---
+You are now connected to database "labdb" as user "app_role".
+>>> Vector 1R2: blind, then SEMANTIC (reformatted) restore -> detectable source diff
 CREATE FUNCTION
 INSERT 0 1
 CREATE FUNCTION
@@ -480,8 +618,8 @@ You are now connected to database "labdb" as user "postgres".
 CREATE TABLE
 CREATE FUNCTION
 CREATE FUNCTION
-DROP EVENT TRIGGER
 psql:<stdin>:43: NOTICE:  event trigger "audit_ddl_guard" does not exist, skipping
+DROP EVENT TRIGGER
 CREATE EVENT TRIGGER
 CREATE TABLE
 CREATE FUNCTION

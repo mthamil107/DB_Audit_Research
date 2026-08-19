@@ -75,7 +75,7 @@ run_cell_1A() {  # pub pin owns  label
   local planted; planted="$(exists_fn evil row_to_json)"
   local res
   if [ "$a" -ge 1 ]; then res="LOGGED (not blinded)"; else res="BLINDED"; fi
-  ROWS+=("| 1A $4 | plain catalog shadow | $1 | $2 | $3 | evil.row_to_json planted=$planted → **$res** | n/a | needs CREATE-on-db to even plant; catalog still wins |")
+  ROWS+=("| 1A $4 | plant shadow in NEW schema evil | $1 | $2 | $3 | evil.row_to_json planted=$planted → **$res** | n/a | blocked at CREATE SCHEMA (no CREATE-on-db) — a privilege barrier, NOT 'catalog wins'; see 1S/1T for the public-schema plant that DOES blind |")
 }
 
 run_cell_1B() {  # pub pin owns label
@@ -86,10 +86,28 @@ run_cell_1B() {  # pub pin owns label
   local res
   if [ "$a" -ge 1 ]; then res="LOGGED (not blinded)"; else res="BLINDED"; fi
   local why
-  if [ "$1" = "on" ] && [ "$2" = "off" ]; then why="CREATE on public + UNPINNED definer fn; exact app.accounts overload beats generic record built-in"
+  if [ "$1" = "on" ] && [ "$2" = "off" ]; then why="CREATE on public + UNPINNED definer fn; caller path places public first (1T isolates whether type-specificity also beats a pg_catalog-first path)"
   elif [ "$2" = "on" ]; then why="pinned search_path defeats the overload even with public writable"
   else why="cannot CREATE in public (stock PG15+) so nothing to shadow"; fi
   ROWS+=("| 1B $4 | public exact-type overload row_to_json(app.accounts) | $1 | $2 | $3 | public.row_to_json planted=$planted → **$res** | n/a | $why |")
+}
+
+run_cell_1S() {  # same-signature record overload, public BEFORE pg_catalog (validates corrected 1A)
+  build_victim on off off
+  attack "run_1S=on"
+  local a planted; a="$(audited 'sentinel-1S')"; planted="$(exists_fn public row_to_json)"
+  local res; if [ "$a" -ge 1 ]; then res="LOGGED (not blinded)"; else res="BLINDED (payload nulled)"; fi
+  ROWS+=("| 1S same-signature shadow | public.row_to_json(**record**), public before pg_catalog | on | off | off | planted=$planted → **$res** | payload-null (audit row still written) | CREATE on public; plain CVE-2018-1058 schema ordering |")
+}
+
+run_cell_1T() {  # type-specificity isolation: exact overload with pg_catalog EXPLICITLY first
+  build_victim on off off
+  attack "run_1T=on"
+  local a planted; a="$(audited 'sentinel-1T')"; planted="$(exists_fn public row_to_json)"
+  local res why
+  if [ "$a" -ge 1 ]; then res="LOGGED (not blinded)"; why="exact overload does NOT beat pg_catalog when catalog is first → 1B blinding was schema-ordering, not type-specificity"
+  else res="BLINDED (payload nulled)"; why="exact app.accounts overload beats generic record built-in EVEN with pg_catalog first → type-specificity confirmed"; fi
+  ROWS+=("| 1T type-specificity isolation | public.row_to_json(**app.accounts**), **pg_catalog first** | on | off | off | planted=$planted → **$res** | payload-null if blinded | $why |")
 }
 
 run_cell_1C() {  # ownership misconfig; measure reversibility via snapshot diff
@@ -114,6 +132,19 @@ run_cell_1C() {  # ownership misconfig; measure reversibility via snapshot diff
   local residret; if [ "${fn_before:-x}" = "${fn_after:-y}" ]; then residret="YES (fn body identical; object-diff clean)"; else residret="NO (fn body changed)"; fi
   local verdict; if [ "$blinded" -eq 0 ] && [ "$ctl" -ge 1 ]; then verdict="BLINDED & reversible"; else verdict="unexpected (sentinel=$blinded ctl=$ctl)"; fi
   ROWS+=("| 1C | replace trigger fn (ownership misconfig) | off | off | on | sentinel write logged=$blinded (0=dropped), post-restore ctl logged=$ctl, business-row present=$present_write → **$verdict** | fn-body object-diff: $residret — BUT DDL-guard caught replace=$ddl_caught event(s), write-vs-audit canary gap=$canary | app owns/ALTER on audit fn |")
+}
+
+run_cell_1R2() {  # RQ2 negative control: semantic (non-verbatim) restore is DETECTABLE
+  build_victim off off on
+  su_f -v tag=before -f - < "$DIR/40_snapshot.sql" 2>>"$EV" | grep -E '^SNAP' > "$ROOT/results/_snap_1R2_${VER}.txt" || true
+  attack "run_1R2=on"
+  su_f -v tag=after -f - < "$DIR/40_snapshot.sql" 2>>"$EV" | grep -E '^SNAP' >> "$ROOT/results/_snap_1R2_${VER}.txt" || true
+  local blinded ctl fb fa
+  blinded="$(audited 'sentinel-1R2')"; ctl="$(audited 'sentinel-1R2-ctl')"
+  fb="$(grep 'before audit if_modified' "$ROOT/results/_snap_1R2_${VER}.txt" | awk '{print $6}')"
+  fa="$(grep 'after audit if_modified'  "$ROOT/results/_snap_1R2_${VER}.txt" | awk '{print $6}')"
+  local diff; if [ "${fb:-x}" != "${fa:-y}" ]; then diff="**DETECTED** (fn md5 before=$fb ≠ after=$fa)"; else diff="not detected (md5 identical)"; fi
+  ROWS+=("| 1R2 semantic restore (RQ2 −ctrl) | blind, restore reformatted-equivalent body | off | off | on | sentinel logged=$blinded, ctl logged=$ctl → **BLINDED** | object-diff: $diff — contrast 1C verbatim replay (clean) | app owns/ALTER on audit fn |")
 }
 
 run_cell_2G() {  # GUC dormant, needs owns=on
@@ -151,7 +182,10 @@ run_cell_1A off on  off "hardened"
 run_cell_1B off off off "public-not-writable (=stock PG15+)"
 run_cell_1B on  off off "writable public (=stock PG14 / misconfig PG15+)"
 run_cell_1B on  on  off "hardened(pinned path)"
+run_cell_1S
+run_cell_1T
 run_cell_1C
+run_cell_1R2
 run_cell_2G
 run_cell_3P
 

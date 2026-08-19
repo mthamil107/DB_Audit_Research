@@ -210,7 +210,9 @@ in what counts as "stock." Summarising the executed matrix:
 
 | Vector | Blinds a write? | Precondition it truly needs |
 |---|---|---|
-| 1A plain catalog shadow (`evil.row_to_json`) | No | `pg_catalog` resolved first; app role cannot even `CREATE SCHEMA` without `CREATE`-on-database |
+| 1A plant shadow in a *new* schema (`evil.row_to_json`) | No (setup-blocked) | fails at `CREATE SCHEMA` (app lacks `CREATE`-on-database) — a privilege barrier, not name resolution |
+| 1S same-signature `public.row_to_json(record)`, public first | **Yes** (payload-null) | writable `public`; plain CVE-2018-1058 schema ordering |
+| 1T exact overload, `pg_catalog` explicitly first | **Yes** (payload-null) | writable `public`; isolates type-specificity (exact match beats built-in despite catalog first) |
 | 1B exact composite overload `public.row_to_json(app.accounts)` | **Yes** | writable `public` **and** unpinned trigger `search_path` |
 | 1C replace the trigger function body | **Yes** | app role owns / can `ALTER` the audit function |
 | 1D bespoke `SECURITY DEFINER` helper | N/A here | no such helper beyond the built-ins in 1A/1B |
@@ -219,8 +221,14 @@ The decisive, verified version nuance: on stock **PostgreSQL 14** a fresh low-pr
 role **can** `CREATE` in `public` (schema ACL grants `PUBLIC` `USAGE+CREATE`), so 1B is
 reachable on defaults; on stock **PostgreSQL 15+/16** `PUBLIC` has only `USAGE`, so 1B
 requires an explicit re-grant or another writable schema on the function's path.
-**Plain catalog shadowing (1A) never blinds** — the exact-overload specificity in 1B is
-what beats `pg_catalog`'s search-order priority.
+**Correction:** 1A fails only because a fresh role cannot `CREATE SCHEMA` (a privilege
+barrier) — *not* because "`pg_catalog` always wins," which would contradict CVE-2018-1058.
+When the attacker plants into the already-writable `public`, shadowing **succeeds** (1S, by
+schema ordering), and the exact-rowtype overload wins **even with `pg_catalog` explicitly
+first** (1T), isolating type-specificity from schema order. The overload vectors (1S/1T/1B)
+*null the captured payload* while still writing an attributed, timestamped audit row; only 1C
+removes the record entirely. (The LaTeX source `self-defeating-audits.tex` / the built PDF is
+the canonical, most-current version.)
 
 ### 6.2 Reversibility (RQ2)
 

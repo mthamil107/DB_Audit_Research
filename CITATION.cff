@@ -4,6 +4,7 @@ title: "Self-Defeating Audits: Reversible Auditor-Blinding and Attribution Poiso
 authors:
   - family-names: "Munirathinam"
     given-names: "Thamilvendhan"
+    orcid: "https://orcid.org/0009-0005-5641-7424"
 type: software
 license: MIT
 doi: 10.5281/zenodo.22004478

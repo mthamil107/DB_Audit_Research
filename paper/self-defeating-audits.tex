@@ -20,7 +20,8 @@
 
 \title{\bfseries Self-Defeating Audits: Reversible Auditor-Blinding and Attribution
 Poisoning by a Low-Privilege Role in Trigger-Based Database Auditing}
-\author{Thamilvendhan Munirathinam}
+\author{Thamilvendhan Munirathinam\\[2pt]
+\small ORCID: 0009-0005-5641-7424 \quad DOI: 10.5281/zenodo.22004478}
 \date{2026-08-19}
 
 \begin{document}
@@ -124,18 +125,30 @@ unpinned \code{SECURITY DEFINER} function resolving an unqualified name to an
 attacker-planted object runs it with the owner's privileges~\cite{cybertec,pgcommit2018}.
 
 \paragraph{Anti-forensics assumes a privileged adversary.}
-Prior work on defeating database audit consistently assumes an administrative adversary.
-MemTraceDB~\cite{memtracedb} states its attacker ``has gained privileged access\ldots{} a
-malicious insider or an external threat actor who has escalated their credentials to an
-administrative level,'' and blinds by disabling logging or editing log files. We are not
-aware of prior work evaluating reversible blinding of an unaudited trigger-based auditor by
-a low-privilege, injection-only role.
+Prior work on database audit tampering and forensics consistently assumes an
+\emph{administrative} adversary. The tamper-detection line~\cite{snodgrass2004,pavlou2008}
+designs hash-chained, externally-validated audit logs against an intruder who can silently
+corrupt stored records---i.e.\ someone with direct write access to DB internals. Storage-level
+breach detection~\cite{wagner2017} is explicitly motivated by ``an attacker with administrator
+privileges who could otherwise cover their tracks by manipulating audit log files,'' and
+blockchain-for-DBMS integrity~\cite{verity2019} assumes ``administrative privileges'' able to
+``alter logs and login records.'' MemTraceDB~\cite{memtracedb} likewise assumes an attacker
+``escalated\ldots{} to an administrative level.'' The practitioner baseline agrees: trigger
+auditing is held to be bypassable only by ``superusers (or table owners)'' who can disable
+triggers, and pgAudit ``cannot reliably audit superusers''~\cite{pgaudit}. The one genuine prior
+art for a \emph{low-privilege} role subverting trusted PostgreSQL machinery is
+CVE-2018-1058~\cite{pgsec2018}: any user who can create in a writable \code{public} can hijack a
+higher-privileged victim's function resolution. We build directly on that primitive but target a
+different asset---the \emph{audit trail} itself (reversible blinding, dormancy, attribution
+poisoning)---which that line does not consider. We are not aware of prior work evaluating
+reversible blinding of an unaudited trigger-based auditor by a low-privilege, injection-only role.
 
 \paragraph{Tamper-evident logging.}
 That an unaudited log is tamperable is textbook: a tamper-evident log ``requires frequent
 auditing'' by ``at least one auditor\ldots{} assumed to be incorruptible''~\cite{crosby2009}.
-Append-only storage is necessary but not sufficient without cryptographic tamper-evidence
-(hash-chaining or signatures)~\cite{schneier1998,rfc6962}.
+Append-only storage is necessary but not sufficient without cryptographic tamper-evidence---%
+forward integrity~\cite{bellare1997}, forward-secure/hash-chained logs~\cite{schneier1998},
+or transparency-log signatures~\cite{rfc6962}.
 
 \section{The victim}
 We build the representative victim as the DBA. A business schema \code{app} owned by the
@@ -187,29 +200,39 @@ what counts as ``stock.''
 \toprule
 Vector & Blinds? & Precondition it truly needs \\
 \midrule
-1A plain catalog shadow & No & \code{pg\_catalog} resolved first; app cannot \code{CREATE SCHEMA} without \code{CREATE}-on-db \\
-1B exact composite overload & \textbf{Yes} & writable \code{public} \emph{and} unpinned trigger \code{search\_path} \\
-1C replace trigger fn body & \textbf{Yes} & app owns / can \code{ALTER} the audit fn \\
-1D bespoke secdef helper & N/A & none beyond the built-ins of 1A/1B \\
+1A plant shadow in a \emph{new} schema & No (setup-blocked) & fails at \code{CREATE SCHEMA} (app lacks \code{CREATE}-on-db) --- a privilege barrier, not name resolution \\
+1S same-signature, \code{public} first & \textbf{Yes} (payload-null) & writable \code{public}; plain CVE-2018-1058 schema ordering \\
+1T exact overload, \code{pg\_catalog} first & \textbf{Yes} (payload-null) & writable \code{public}; isolates type-specificity (exact match beats built-in despite catalog first) \\
+1C replace trigger fn body & \textbf{Yes} (no record) & app owns / can \code{ALTER} the audit fn \\
+1D bespoke secdef helper & N/A & none beyond the built-ins above \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
 The decisive, verified version nuance: on stock PostgreSQL~14 a fresh low-privilege role
 \emph{can} \code{CREATE} in \code{public} (ACL grants \code{PUBLIC} \code{USAGE+CREATE}), so
-1B is reachable on defaults; on stock 15+/16 \code{PUBLIC} has only \code{USAGE}, so 1B
-needs an explicit re-grant or another writable schema on the function's path. Plain catalog
-shadowing (1A) never blinds---the exact-overload specificity in 1B is what beats
-\code{pg\_catalog}'s search-order priority.
+the overload shadow is reachable on defaults; on stock 15+/16 \code{PUBLIC} has only
+\code{USAGE}, so it needs an explicit re-grant or another writable schema on the function's
+path. We stress a correction over an earlier draft: 1A does \emph{not} show that
+``\code{pg\_catalog} always wins''---that would contradict CVE-2018-1058. 1A fails purely
+because a fresh role cannot create a schema; when the attacker plants into the
+\emph{already-writable} \code{public}, shadowing succeeds (1S, by schema ordering), and the
+exact-rowtype overload wins \emph{even with \code{pg\_catalog} explicitly first} (1T),
+isolating best-type-match from schema order. Note the distinction: the overload vectors
+(1S/1T) null the captured payload while still writing an attributed, timestamped audit row
+(\emph{payload-nulling}); only 1C removes the record entirely.
 
 \subsection{Reversibility (RQ2)}
 In 1C the attacker captures the exact original definition (\code{pg\_proc.prosrc} is
 world-readable and stored \emph{verbatim}), replaces the body with a no-op to drop one
 write, then replays the captured definition byte-for-byte: \code{pg\_get\_functiondef} is
-identical before and after, so a source/object diff finds nothing. A naive
-semantically-equivalent restore does \emph{not} match. What still betrays a perfect restore
-is \emph{independent} of the audit code: a write-versus-audit canary shows a gap of one, and
-a DDL event trigger recorded two \code{CREATE OR REPLACE FUNCTION} events. Object-diffing the
+identical before and after, so a source/object diff finds nothing. This is not a tautology
+but a contrast: our negative control (1R2) restores a \emph{behaviourally-identical but
+reformatted} body and the function md5 changes (\texttt{66cf56bc\ldots} $\rightarrow$
+\texttt{bab9fc81\ldots}), so a naive restore \emph{is} detected---only the verbatim
+capture-and-replay defeats the diff. What still betrays even a perfect restore is
+\emph{independent} of the audit code: a write-versus-audit canary shows a gap of one, and a
+DDL event trigger recorded two \code{CREATE OR REPLACE FUNCTION} events. Object-diffing the
 audit code is therefore insufficient on its own.
 
 \subsection{Dormant bypass (RQ3) and attribution poisoning (RQ4)}
@@ -290,9 +313,16 @@ auditee against an unaudited auditor; (ii)~the composition of reversible blindin
 bypass, and in-database attribution poisoning; (iii)~the verbatim-restore reversibility
 observation; (iv)~an executed cross-engine defense evaluation and reproducible artifact.
 
-\paragraph{Honest scoping.} The strongest ``works on stock defaults'' claim holds only for
-PostgreSQL~$\leq$14; on 15+ the \code{public}-schema default change makes 1B
-misconfiguration-gated. We state the version and \code{public}-schema ACL for every result.
+\paragraph{Honest scoping and significance.} The strongest ``works on stock defaults'' claim
+holds only for the overload-shadow class (1S/1T/1B) on PostgreSQL~$\leq$14; on 15+ the
+\code{public}-schema default change makes it misconfiguration-gated. We state the version and
+\code{public}-schema ACL for every result. We are also explicit that 1C, dormancy, and
+attribution poisoning \emph{presuppose an audit-object misconfiguration}: the app role already
+owns/can \code{ALTER} the audit function, or can \code{INSERT} into the audit table. Their
+contribution is not ``tampering is possible'' (expected once the auditee controls the auditor)
+but \emph{what such a common misconfiguration additionally unlocks}---clean-object-diff
+reversibility, session-gated dormancy, and forensically-indistinguishable poisoning---and how
+detectably each manifests, which differs sharply across the three engines.
 
 \paragraph{Limitations.} We evaluate PostgreSQL (14, 16), the MySQL family (MariaDB 10.6,
 10.11), and SQL Server (2025/v17); Oracle is future work. The SQL Server experiments run on
@@ -338,6 +368,19 @@ never alter, and record at the engine into an out-of-engine, hash-chained, appen
 \url{https://www.cybertec-postgresql.com/en/abusing-security-definer-functions/}
 \bibitem{memtracedb} \emph{MemTraceDB}. arXiv:2509.05891.
 \url{https://arxiv.org/pdf/2509.05891}
+\bibitem{snodgrass2004} R.~T.~Snodgrass, S.~S.~Yao, C.~Collberg. \emph{Tamper Detection in
+Audit Logs}. VLDB 2004, pp.~504--515.
+\bibitem{pavlou2008} K.~E.~Pavlou, R.~T.~Snodgrass. \emph{Forensic Analysis of Database
+Tampering}. ACM TODS 33(4), Art.~30, 2008. \url{https://doi.org/10.1145/1412331.1412342}
+\bibitem{wagner2017} J.~Wagner et al. \emph{Carving Database Storage to Detect and Trace
+Security Breaches}. Digital Investigation 22 (DFRWS USA 2017), S127--S136.
+\url{https://doi.org/10.1016/j.diin.2017.06.006}
+\bibitem{verity2019} S.~S.~Srivastava et al. \emph{Verity: Blockchains to Detect Insider
+Attacks in DBMS}. arXiv:1901.00228. \url{https://arxiv.org/abs/1901.00228}
+\bibitem{bellare1997} M.~Bellare, B.~Yee. \emph{Forward Integrity for Secure Audit Logs}.
+Tech.\ Report, UC San Diego, 1997.
+\bibitem{pgaudit} pgAudit --- PostgreSQL Audit Logging, and PostgreSQL Wiki, \emph{Audit
+trigger}. \url{https://github.com/pgaudit/pgaudit}
 \bibitem{crosby2009} S.~A.~Crosby and D.~S.~Wallach. \emph{Efficient Data Structures for
 Tamper-Evident Logging}. USENIX Security 2009.
 \bibitem{schneier1998} B.~Schneier and J.~Kelsey. \emph{Cryptographic Support for Secure
