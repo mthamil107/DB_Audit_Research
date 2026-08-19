@@ -118,32 +118,35 @@ Empirical defense results (both versions):
 
 ---
 
-## Cross-engine generalization (MySQL family: MariaDB 10.6 and 10.11)
+## Cross-engine generalization (MySQL family + SQL Server)
 
-We reproduced the study against the MySQL-family engine (MariaDB, whose `DEFINER`-trigger and
-`TRIGGER`-privilege model is the MySQL analogue) to test whether "self-defeating audits" is a
-PostgreSQL quirk or a cross-engine class. Results are identical across MariaDB 10.6 and 10.11.
-The composition transfers, but the *exploitation surface and reversibility differ by engine* —
-which is itself a finding:
+We reproduced the study on two more engine families to test whether "self-defeating audits" is
+PostgreSQL-specific: the **MySQL family** (MariaDB 10.6 and 10.11) and **SQL Server** (LocalDB,
+SQL Server 2025 / v17). The composition transfers to all three, but the exploitation surface and
+reversibility differ by engine — which is itself the finding.
 
-| Aspect | PostgreSQL | MySQL family (MariaDB) |
-|---|---|---|
-| **Shadow class (1A/1B)** | 1B blinds on stock PG≤14 (writable `public` + unpinned `search_path`) | **Does NOT transfer** — no `search_path`; built-in `JSON_OBJECT` is not shadowable; app lacks `CREATE ROUTINE`. The strongest "stock-default" PG vector has no MySQL analogue. |
-| **Trigger/fn replacement (1C)** | Blinds; attacker restores source **byte-for-byte** → clean object diff | Blinds (with `TRIGGER` priv), but the audit trigger's **`DEFINER` binds privilege**: the app role cannot recreate the original `root`-`DEFINER` trigger without `SET USER`/`SUPER`, so a **missing/altered trigger is an un-erasable residue**. Object-level tamper-evidence is *stronger* here. |
-| **Dormant bypass (Exp 2)** | SECURITY DEFINER function alone suffices | **Harder** — a replacement app-`DEFINER` trigger cannot write the root-owned audit table, so selective dormant logging *additionally* needs an audit-`INSERT` grant. |
-| **Attribution poisoning (Exp 3)** | Fabricated, backdated, indistinguishable | **Identical** — same result with a broad `INSERT` grant. |
-| **Engine-level defense** | pgaudit / `log_statement` | `general_log` / binary log — captured the blinded write in an engine log the app role can neither read nor purge. |
-| **Extra engine-specific barrier** | (n/a) | `log_bin_trust_function_creators=0` + binlog blocks non-`SUPER` trigger creation outright. |
+| Aspect | PostgreSQL (14/16) | MySQL family (MariaDB 10.6/10.11) | SQL Server (2025 / v17) |
+|---|---|---|---|
+| **"Definer" mechanism** | `SECURITY DEFINER` function | `DEFINER` trigger | ownership chaining (`EXECUTE AS` also available) |
+| **Shadow class (1A/1B)** | **blinds on stock PG≤14** (writable `public` + unpinned `search_path`) | **N/A** — no `search_path`; built-ins unshadowable | **N/A** — no `search_path`; unqualified names in a `dbo` module resolve in `dbo` |
+| **Precondition for replacement** | app owns the audit function | app has `TRIGGER` priv on the table | app has `ALTER` on the table |
+| **Trigger/fn replacement (1C)** | blinds; **byte-perfect verbatim restore** → clean object diff | blinds; **cannot restore** the `root`-DEFINER trigger (no `SET USER`/`SUPER`) → missing-trigger residue | blinds; **byte-perfect verbatim restore** → clean object diff (like PG) |
+| **Extra blinding primitive** | — | — | **`DISABLE TRIGGER`** — zero-residue, reversible, definition unchanged |
+| **Dormant bypass** | **easy** (DEFINER fn alone) | **harder** — needs an extra audit-`INSERT` grant | **easy** — `ALTER` keeps `dbo` ownership → chaining survives (like PG) |
+| **Attribution poisoning** | fabricated, backdated, indistinguishable | identical | identical |
+| **Engine-level defense** | pgaudit / `log_statement` | `general_log` / binary log | SQL Server Audit |
+| **Detection nuance** | DDL event trigger catches the replace | object-diff exposes the missing/altered trigger | DDL trigger catches `ALTER` but **NOT `DISABLE`** (gap) |
 
 **Cross-engine thesis:** the *self-defeating-audit* threat — an auditee at application privilege
-blinding an unaudited in-engine auditor, plus dormant bypass and attribution poisoning — is
-**not PostgreSQL-specific**; it holds on the MySQL family too. But PostgreSQL is the *most
-permissive* target (name-resolution shadowing on stock ≤14 defaults, plus byte-perfect
-reversible restore), whereas MySQL's `DEFINER`-privilege binding makes blinding **more
-detectable** and dormancy **harder**. The common core — never trust an in-engine trigger log as
-tamper-proof against the role it audits; require engine-level plus out-of-engine tamper-evidence
-— generalizes across both engines. (SQL Server, with `EXECUTE AS` / ownership chaining and
-trigger `DISABLE` rights, is the next target and is expected to sit between the two.)
+blinding an unaudited in-engine auditor, plus dormant bypass and attribution poisoning — is a
+**three-engine class**, not a PostgreSQL quirk. PostgreSQL and SQL Server form the *permissive*
+pair (verbatim-restore reversibility and easy dormancy), while the **MySQL family is the most
+tamper-evident** because its `DEFINER`-privilege binding stops the attacker from restoring the
+original trigger. PostgreSQL is uniquely exposed on *stock defaults* (name-resolution shadowing on
+PG≤14); SQL Server uniquely adds a **zero-residue `DISABLE TRIGGER`** primitive whose blinding its
+own DDL-trigger defense does not catch. The common core — never trust an in-engine trigger log as
+tamper-proof against the role it audits; require engine-level plus out-of-engine tamper-evidence —
+holds identically on all three.
 
 ## Novelty positioning (from the verified deep-research pass)
 

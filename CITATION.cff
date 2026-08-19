@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use this lab or its findings, please cite it as below."
-title: "Self-Defeating Audits: Reversible Auditor-Blinding and Attribution Poisoning by a Low-Privilege Role in Trigger-Based PostgreSQL Auditing"
+title: "Self-Defeating Audits: Reversible Auditor-Blinding and Attribution Poisoning by a Low-Privilege Role in Trigger-Based Database Auditing"
 authors:
   - family-names: "Munirathinam"
     given-names: "Thamilvendhan"

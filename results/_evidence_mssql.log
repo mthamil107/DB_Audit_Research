@@ -1,0 +1,113 @@
+=== build victim ===
+Changed database context to 'labdb'.
+BASELINE_AUDIT_COUNT n=1
+
+=== cell_sh.sql ===
+Changed database context to 'labdb'.
+
+(1 rows affected)
+RES SH logged=1
+
+(1 rows affected)
+=== build victim ===
+Changed database context to 'labdb'.
+BASELINE_AUDIT_COUNT n=1
+
+=== cell_1c_alter.sql ===
+Changed database context to 'labdb'.
+SNAP 1C before hash=2356B556C5EB8E9F0ED140D25E90F1BA8F27995F3FB8BB0A7DC8E63DFD311D9D
+
+(1 rows affected)
+
+(1 rows affected)
+
+(1 rows affected)
+
+(1 rows affected)
+RES 1C blinded_logged=0 ctl_logged=1
+
+(1 rows affected)
+SNAP 1C after hash=2356B556C5EB8E9F0ED140D25E90F1BA8F27995F3FB8BB0A7DC8E63DFD311D9D
+
+(1 rows affected)
+=== build victim ===
+Changed database context to 'labdb'.
+BASELINE_AUDIT_COUNT n=1
+
+=== cell_1c_disable.sql ===
+Changed database context to 'labdb'.
+
+(1 rows affected)
+
+(1 rows affected)
+RES 1Ddisable blinded_logged=0 ctl_logged=1 is_disabled_now=0
+
+(1 rows affected)
+=== build victim ===
+Changed database context to 'labdb'.
+BASELINE_AUDIT_COUNT n=1
+
+=== cell_2g.sql ===
+Changed database context to 'labdb'.
+
+(1 rows affected)
+
+(1 rows affected)
+RES 2G gated_logged=0 ctl_logged=1
+
+(1 rows affected)
+=== build victim ===
+Changed database context to 'labdb'.
+BASELINE_AUDIT_COUNT n=1
+
+=== cell_3p.sql ===
+Changed database context to 'labdb'.
+
+(1 rows affected)
+RES 3P ghost=1 backdated=1
+
+(1 rows affected)
+=== build victim ===
+Changed database context to 'labdb'.
+BASELINE_AUDIT_COUNT n=1
+
+=== def_priv.sql ===
+Changed database context to 'labdb'.
+disable-denied: Cannot find the object "accounts_audit" because it does not exist or you do not have permissions.
+
+(1 rows affected)
+RES DPRIV logged=1
+
+(1 rows affected)
+=== build victim ===
+Changed database context to 'labdb'.
+BASELINE_AUDIT_COUNT n=1
+
+=== def_ddlguard.sql ===
+Changed database context to 'labdb'.
+RES DDLGUARD disable_caught=0
+
+(1 rows affected)
+RES DDLGUARD alter_caught=1
+
+(1 rows affected)
+=== build victim ===
+Changed database context to 'labdb'.
+BASELINE_AUDIT_COUNT n=1
+
+=== def_hash.sql ===
+Changed database context to 'labdb'.
+
+(1 rows affected)
+
+(1 rows affected)
+
+(1 rows affected)
+RES HC intact=NULL
+
+(1 rows affected)
+
+(1 rows affected)
+RES HC tampered=4
+
+(1 rows affected)

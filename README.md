@@ -32,10 +32,10 @@ docker rm -f sda_pg16  # free the port between versions
 
 Requires Docker. Uses the `-alpine` images (functionally identical engine).
 
-## Cross-engine (MySQL family)
+## Cross-engine (MySQL family + SQL Server)
 
-The same study runs against MariaDB (the MySQL-family `DEFINER`-trigger model) under
-`scripts/mysql/`:
+The study is reproduced on two more engine families. **MySQL family** (MariaDB,
+`DEFINER`-trigger model) under `scripts/mysql/`:
 
 ```bash
 cd scripts/mysql
@@ -43,10 +43,21 @@ cd scripts/mysql
 docker rm -f sda_maria_10_11 && ./00_up.sh 10.6 && ./run_matrix_mysql.sh 10.6
 ```
 
-Headline cross-engine result: the `search_path` shadow class (1A/1B) **does not transfer**
-(MySQL has no `search_path`), but trigger-replacement, dormant bypass, and attribution
-poisoning do — and MySQL's `DEFINER`-privilege binding makes blinding **more detectable**
-than PostgreSQL's byte-perfect restore. See `FINDINGS.md` for the full comparison.
+**SQL Server** (ownership-chaining model) under `scripts/mssql/` — runs on a local
+LocalDB instance via host `sqlcmd` (no Docker; the low-priv attacker is modelled with
+`EXECUTE AS USER` impersonation):
+
+```bash
+cd scripts/mssql
+./run_matrix_mssql.sh        # -> results/RESULTS_mssql.md ; then ./teardown.sh
+```
+
+Headline cross-engine result: the `search_path` shadow class (1A/1B) **transfers to
+neither** MySQL nor SQL Server (no `search_path`), but trigger-replacement, dormant
+bypass, and attribution poisoning do. MySQL's `DEFINER`-privilege binding makes blinding
+**more detectable**; SQL Server, like PostgreSQL, allows byte-perfect restore and adds a
+**zero-residue `DISABLE TRIGGER`** primitive its own DDL defense misses. Full three-engine
+comparison in `FINDINGS.md`.
 
 ## Layout
 
@@ -54,7 +65,9 @@ than PostgreSQL's byte-perfect restore. See `FINDINGS.md` for the full compariso
 |---|---|
 | `scripts/00_up.sh` | version-pinned throwaway container (PostgreSQL) |
 | `scripts/mysql/` | MySQL-family (MariaDB) victim, attacks, defenses, and orchestrator |
+| `scripts/mssql/` | SQL Server (LocalDB) victim, attacks, defenses, and orchestrator |
 | `results/RESULTS_mariadb_*.md` | MySQL-family feasibility + defense matrices |
+| `results/RESULTS_mssql.md` | SQL Server feasibility + defense matrix |
 | `scripts/10_victim.sql` | the wiki-pattern audit victim (SECURITY DEFINER trigger); knobs: `pub_create`, `pin_path`, `app_owns` |
 | `scripts/20_attacks.sql` | all attack vectors (1A/1B/1C, GUC dormant, attribution poison), one `\if`-guard per cell |
 | `scripts/30_defenses.sql` | DDL event-trigger guard + hash-chained append-only sink |
