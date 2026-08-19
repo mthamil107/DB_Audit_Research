@@ -1,0 +1,93 @@
+
+=== BUILD VICTIM ===
+tag	n
+BASELINE_AUDIT_COUNT	1
+
+--- ATTACK atk_fn.sql ---
+--------------
+CREATE FUNCTION labdb.JSON_OBJECT_SHADOW() RETURNS JSON RETURN NULL
+--------------
+
+ERROR 1044 (42000) at line 7: Access denied for user 'app_user'@'%' to database 'labdb'
+
+=== BUILD VICTIM ===
+tag	n
+BASELINE_AUDIT_COUNT	1
+
+--- ATTACK atk_1c.sql ---
+--------------
+CREATE DEFINER=`root`@`localhost` TRIGGER labdb.accounts_ai AFTER INSERT ON labdb.app_accounts
+FOR EACH ROW
+  INSERT INTO labdb.audit_logged_actions(table_name,action,row_data,changed_by,client_host)
+  VALUES('app_accounts','I',
+         JSON_OBJECT('id',NEW.id,'holder',NEW.holder,'balance_cents',NEW.balance_cents),
+         USER(), @@hostname)
+--------------
+
+ERROR 1227 (42000) at line 15: Access denied; you need (at least one of) the SUPER, SET USER privilege(s) for this operation
+
+=== BUILD VICTIM ===
+tag	n
+BASELINE_AUDIT_COUNT	1
+
+--- ATTACK atk_2g.sql ---
+
+=== BUILD VICTIM ===
+tag	n
+BASELINE_AUDIT_COUNT	1
+
+--- ATTACK atk_3p.sql ---
+
+=== BUILD VICTIM ===
+tag	n
+BASELINE_AUDIT_COUNT	1
+
+--- ATTACK atk_1c.sql ---
+--------------
+DROP TRIGGER IF EXISTS labdb.accounts_ai
+--------------
+
+ERROR 1142 (42000) at line 5: TRIGGER command denied to user 'app_user'@'localhost' for table `labdb`.`app_accounts`
+--------------
+CREATE DEFINER=CURRENT_USER TRIGGER labdb.accounts_ai AFTER INSERT ON labdb.app_accounts
+FOR EACH ROW SET @noop = 1
+--------------
+
+ERROR 1142 (42000) at line 6: TRIGGER command denied to user 'app_user'@'localhost' for table `labdb`.`app_accounts`
+--------------
+DROP TRIGGER IF EXISTS labdb.accounts_ai
+--------------
+
+ERROR 1142 (42000) at line 14: TRIGGER command denied to user 'app_user'@'localhost' for table `labdb`.`app_accounts`
+--------------
+CREATE DEFINER=`root`@`localhost` TRIGGER labdb.accounts_ai AFTER INSERT ON labdb.app_accounts
+FOR EACH ROW
+  INSERT INTO labdb.audit_logged_actions(table_name,action,row_data,changed_by,client_host)
+  VALUES('app_accounts','I',
+         JSON_OBJECT('id',NEW.id,'holder',NEW.holder,'balance_cents',NEW.balance_cents),
+         USER(), @@hostname)
+--------------
+
+ERROR 1142 (42000) at line 15: TRIGGER command denied to user 'app_user'@'localhost' for table `labdb`.`app_accounts`
+
+=== BUILD VICTIM ===
+tag	n
+BASELINE_AUDIT_COUNT	1
+
+--- ATTACK atk_1c.sql ---
+--------------
+CREATE DEFINER=`root`@`localhost` TRIGGER labdb.accounts_ai AFTER INSERT ON labdb.app_accounts
+FOR EACH ROW
+  INSERT INTO labdb.audit_logged_actions(table_name,action,row_data,changed_by,client_host)
+  VALUES('app_accounts','I',
+         JSON_OBJECT('id',NEW.id,'holder',NEW.holder,'balance_cents',NEW.balance_cents),
+         USER(), @@hostname)
+--------------
+
+ERROR 1227 (42000) at line 15: Access denied; you need (at least one of) the SUPER, SET USER privilege(s) for this operation
+
+=== BUILD VICTIM ===
+tag	n
+BASELINE_AUDIT_COUNT	1
+tag
+DEFENSES_INSTALLED

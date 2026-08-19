@@ -32,11 +32,29 @@ docker rm -f sda_pg16  # free the port between versions
 
 Requires Docker. Uses the `-alpine` images (functionally identical engine).
 
+## Cross-engine (MySQL family)
+
+The same study runs against MariaDB (the MySQL-family `DEFINER`-trigger model) under
+`scripts/mysql/`:
+
+```bash
+cd scripts/mysql
+./00_up.sh 10.11 && ./run_matrix_mysql.sh 10.11   # -> results/RESULTS_mariadb_10.11.md
+docker rm -f sda_maria_10_11 && ./00_up.sh 10.6 && ./run_matrix_mysql.sh 10.6
+```
+
+Headline cross-engine result: the `search_path` shadow class (1A/1B) **does not transfer**
+(MySQL has no `search_path`), but trigger-replacement, dormant bypass, and attribution
+poisoning do — and MySQL's `DEFINER`-privilege binding makes blinding **more detectable**
+than PostgreSQL's byte-perfect restore. See `FINDINGS.md` for the full comparison.
+
 ## Layout
 
 | Path | What |
 |---|---|
-| `scripts/00_up.sh` | version-pinned throwaway container |
+| `scripts/00_up.sh` | version-pinned throwaway container (PostgreSQL) |
+| `scripts/mysql/` | MySQL-family (MariaDB) victim, attacks, defenses, and orchestrator |
+| `results/RESULTS_mariadb_*.md` | MySQL-family feasibility + defense matrices |
 | `scripts/10_victim.sql` | the wiki-pattern audit victim (SECURITY DEFINER trigger); knobs: `pub_create`, `pin_path`, `app_owns` |
 | `scripts/20_attacks.sql` | all attack vectors (1A/1B/1C, GUC dormant, attribution poison), one `\if`-guard per cell |
 | `scripts/30_defenses.sql` | DDL event-trigger guard + hash-chained append-only sink |

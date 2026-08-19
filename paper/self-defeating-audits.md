@@ -38,7 +38,11 @@ defense evaluation, and a reproducible artifact. We show that pinning the trigge
 `search_path`, revoking `CREATE` on `public`, correcting audit-object ownership, and —
 decisively — engine-level logging (pgaudit / `log_statement`) combined with a
 hash-chained append-only sink each stop a specific subset, and that only engine-level
-plus out-of-engine tamper-evidence closes the whole set.
+plus out-of-engine tamper-evidence closes the whole set. We further confirm the threat is
+cross-engine on the MySQL family (MariaDB 10.6/10.11): the name-resolution shadowing class
+does not transfer (no `search_path`), but trigger-replacement, dormant bypass, and
+attribution poisoning do — with MySQL's `DEFINER`-privilege binding making blinding more
+detectable and dormancy harder than in PostgreSQL.
 
 ## 1. Introduction
 
@@ -241,6 +245,26 @@ documentation IP, back-dated three days — that is schema-identical to genuine 
 reviewer using only the audit table has no field that flags it as forged. Exposure
 requires cross-layer correlation with an independent app-side log.
 
+### 6.4 Cross-engine generalisation (MySQL family)
+
+To test whether the phenomenon is PostgreSQL-specific, we reproduced the study on the MySQL
+family (MariaDB 10.6 and 10.11), whose `DEFINER`-trigger and `TRIGGER`-privilege model is the
+MySQL analogue of `SECURITY DEFINER`. The composition transfers, but the exploitation surface
+and reversibility differ by engine — which is itself a result. The name-resolution shadowing
+class (1A/1B) does **not** transfer: MySQL has no `search_path`, its built-ins are not
+shadowable, and a low-privilege role lacks `CREATE ROUTINE` — so the strongest stock-default
+PostgreSQL vector has no MySQL analogue. Trigger replacement (1C) transfers given the `TRIGGER`
+privilege, but the audit trigger's `DEFINER` binds privilege: the app role cannot recreate the
+original `root`-`DEFINER` trigger without `SET USER`/`SUPER`, so a missing or altered trigger is
+an un-erasable residue — object-level tamper-evidence is *stronger* than PostgreSQL's
+byte-perfect restore. The dormant bypass is *harder* (a replacement app-`DEFINER` trigger cannot
+write the root-owned audit table, so selective dormant logging additionally needs an
+audit-`INSERT` grant), while attribution poisoning is identical. Engine-level logging
+(`general_log`/binary log) captured a blinded write in a log the app role can neither read nor
+purge, and the hash-chained sink detected tampering, mirroring PostgreSQL. Net: the
+self-defeating-audit threat is cross-engine, but PostgreSQL is the most permissive target and
+MySQL's `DEFINER`-privilege binding makes blinding more detectable and dormancy harder.
+
 ## 7. Defenses (RQ5)
 
 Every defense below was executed against the live attacks, not asserted. The
@@ -282,11 +306,12 @@ PostgreSQL ≤14; on 15+ the `public`-schema default change makes 1B misconfigur
 gated. We state the PostgreSQL version and `public`-schema ACL for every result rather
 than generalising.
 
-**Limitations.** The study is PostgreSQL-specific; whether the composition generalises
-to MySQL, SQL Server, or Oracle audit mechanisms is future work and is the path to a
-stronger cross-engine claim. The victim is the wiki pattern; bespoke auditors may pin
-`search_path` or use engine logging already. We measure blinding of a single logical
-write, not throughput-scale evasion.
+**Limitations.** We evaluate PostgreSQL (14, 16) and the MySQL family (MariaDB 10.6,
+10.11); SQL Server (`EXECUTE AS` / ownership chaining, trigger `DISABLE` rights) and
+Oracle are future work and are expected to sit between the two engines already measured.
+The victim is the wiki pattern; bespoke auditors may pin `search_path` or use engine
+logging already. We measure blinding of a single logical write, not throughput-scale
+evasion.
 
 ## 9. Responsible disclosure
 

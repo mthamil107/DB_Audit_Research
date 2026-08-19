@@ -118,6 +118,33 @@ Empirical defense results (both versions):
 
 ---
 
+## Cross-engine generalization (MySQL family: MariaDB 10.6 and 10.11)
+
+We reproduced the study against the MySQL-family engine (MariaDB, whose `DEFINER`-trigger and
+`TRIGGER`-privilege model is the MySQL analogue) to test whether "self-defeating audits" is a
+PostgreSQL quirk or a cross-engine class. Results are identical across MariaDB 10.6 and 10.11.
+The composition transfers, but the *exploitation surface and reversibility differ by engine* —
+which is itself a finding:
+
+| Aspect | PostgreSQL | MySQL family (MariaDB) |
+|---|---|---|
+| **Shadow class (1A/1B)** | 1B blinds on stock PG≤14 (writable `public` + unpinned `search_path`) | **Does NOT transfer** — no `search_path`; built-in `JSON_OBJECT` is not shadowable; app lacks `CREATE ROUTINE`. The strongest "stock-default" PG vector has no MySQL analogue. |
+| **Trigger/fn replacement (1C)** | Blinds; attacker restores source **byte-for-byte** → clean object diff | Blinds (with `TRIGGER` priv), but the audit trigger's **`DEFINER` binds privilege**: the app role cannot recreate the original `root`-`DEFINER` trigger without `SET USER`/`SUPER`, so a **missing/altered trigger is an un-erasable residue**. Object-level tamper-evidence is *stronger* here. |
+| **Dormant bypass (Exp 2)** | SECURITY DEFINER function alone suffices | **Harder** — a replacement app-`DEFINER` trigger cannot write the root-owned audit table, so selective dormant logging *additionally* needs an audit-`INSERT` grant. |
+| **Attribution poisoning (Exp 3)** | Fabricated, backdated, indistinguishable | **Identical** — same result with a broad `INSERT` grant. |
+| **Engine-level defense** | pgaudit / `log_statement` | `general_log` / binary log — captured the blinded write in an engine log the app role can neither read nor purge. |
+| **Extra engine-specific barrier** | (n/a) | `log_bin_trust_function_creators=0` + binlog blocks non-`SUPER` trigger creation outright. |
+
+**Cross-engine thesis:** the *self-defeating-audit* threat — an auditee at application privilege
+blinding an unaudited in-engine auditor, plus dormant bypass and attribution poisoning — is
+**not PostgreSQL-specific**; it holds on the MySQL family too. But PostgreSQL is the *most
+permissive* target (name-resolution shadowing on stock ≤14 defaults, plus byte-perfect
+reversible restore), whereas MySQL's `DEFINER`-privilege binding makes blinding **more
+detectable** and dormancy **harder**. The common core — never trust an in-engine trigger log as
+tamper-proof against the role it audits; require engine-level plus out-of-engine tamper-evidence
+— generalizes across both engines. (SQL Server, with `EXECUTE AS` / ownership chaining and
+trigger `DISABLE` rights, is the next target and is expected to sit between the two.)
+
 ## Novelty positioning (from the verified deep-research pass)
 
 **Cite as prior art — do not claim:**
