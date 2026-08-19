@@ -6,6 +6,14 @@ authors:
     given-names: "Thamilvendhan"
 type: software
 license: MIT
+doi: 10.5281/zenodo.22004478
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.22004478
+    description: "Concept DOI (all versions)"
+  - type: doi
+    value: 10.5281/zenodo.22004479
+    description: "Version v1 DOI"
 repository-code: "https://github.com/mthamil107/DB_Audit_Research"
 abstract: >-
   A reproducible defensive-security lab testing whether a low-privilege,

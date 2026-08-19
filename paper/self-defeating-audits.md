@@ -302,8 +302,9 @@ Section 7.
 The complete lab — container setup, parameterised victim, attack catalogue, defenses,
 snapshot tooling, and the orchestrator that fills the matrices — is released as an
 artifact with pinned image digests and per-version evidence logs. A single driver
-reproduces every cell on PostgreSQL 14 and 16. Archived at Zenodo (DOI to be inserted
-on deposit) and mirrored on GitHub.
+reproduces every cell on PostgreSQL 14 and 16. Archived at Zenodo
+(DOI: 10.5281/zenodo.22004478) and mirrored on GitHub
+(https://github.com/mthamil107/DB_Audit_Research).
 
 ## 11. Conclusion
 

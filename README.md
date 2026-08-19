@@ -1,5 +1,8 @@
 # Self-Defeating Audits — reproducible lab
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22004478.svg)](https://doi.org/10.5281/zenodo.22004478)
+&nbsp;License: MIT (code) / CC BY 4.0 (docs)
+
 Defensive-security research testing whether a **low-privilege, injection-only** database
 role can **reversibly blind a trigger-based auditor** and **poison attribution** on stock
 PostgreSQL — and which defenses actually stop it. Everything runs in **disposable, local
