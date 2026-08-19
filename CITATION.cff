@@ -12,8 +12,11 @@ identifiers:
     value: 10.5281/zenodo.22004478
     description: "Concept DOI (all versions)"
   - type: doi
+    value: 10.5281/zenodo.22010485
+    description: "Version v2 DOI (three-engine: PostgreSQL, MySQL, SQL Server)"
+  - type: doi
     value: 10.5281/zenodo.22004479
-    description: "Version v1 DOI"
+    description: "Version v1 DOI (PostgreSQL only)"
 repository-code: "https://github.com/mthamil107/DB_Audit_Research"
 abstract: >-
   A reproducible defensive-security lab testing whether a low-privilege,
