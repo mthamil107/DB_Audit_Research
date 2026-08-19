@@ -12,8 +12,11 @@ identifiers:
     value: 10.5281/zenodo.22004478
     description: "Concept DOI (all versions)"
   - type: doi
+    value: 10.5281/zenodo.22011492
+    description: "Version v4 DOI (three-engine + LaTeX PDF + source) — current"
+  - type: doi
     value: 10.5281/zenodo.22010811
-    description: "Version v3 DOI (three-engine + rendered PDF) — current"
+    description: "Version v3 DOI (three-engine + rendered PDF)"
   - type: doi
     value: 10.5281/zenodo.22010485
     description: "Version v2 DOI (three-engine: PostgreSQL, MySQL, SQL Server)"
