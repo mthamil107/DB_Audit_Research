@@ -1,0 +1,350 @@
+\documentclass[11pt]{article}
+% Self-Defeating Audits — venue-ready LaTeX source.
+% Single-column (Elsevier/DFRWS preprint style); compiles with a minimal LaTeX toolchain
+% (article + these standard packages). One pass, manual bibliography (no bibtex needed).
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=1in]{geometry}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+\usepackage{amssymb}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\lstset{basicstyle=\ttfamily\footnotesize,breaklines=true,columns=fullflexible,
+  backgroundcolor=\color{gray!8},frame=single,framesep=4pt,xleftmargin=4pt}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\bfseries Self-Defeating Audits: Reversible Auditor-Blinding and Attribution
+Poisoning by a Low-Privilege Role in Trigger-Based Database Auditing}
+\author{Thamilvendhan Munirathinam}
+\date{2026-08-19}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+In-database audit trails are widely treated as ground truth for forensic reconstruction
+and compliance. We revisit that assumption for the most widely-copied trigger-based
+auditing pattern in PostgreSQL---an \code{AFTER} row trigger calling a \code{SECURITY
+DEFINER} function that serialises each write via an unqualified \code{row\_to\_json} into
+a privileged audit table---and ask a question the existing anti-forensics literature does
+not: \emph{can the auditee itself, holding only the application's privileges (as reached
+through SQL injection, with no superuser and no OS access), reversibly blind this auditor
+and poison attribution from within the database?} We build a disposable, synthetic-data
+lab and work a feasibility matrix cell-by-cell on stock PostgreSQL 14 and 16. Plain
+\code{search\_path} shadowing of a catalog built-in fails (as expected, since
+\code{pg\_catalog} is resolved first), but planting an \emph{exact composite-type
+overload} of \code{row\_to\_json} in a writable \code{public} schema silently nulls
+captured rows against an unpinned \code{SECURITY DEFINER} trigger---reachable on stock
+PostgreSQL~$\leq$14, where \code{PUBLIC} holds \code{CREATE} on \code{public} by default,
+and misconfiguration-gated on 15+. Where the audit function is owned by the application's
+own role, the attacker replaces its body to drop writes and then restores the original
+source byte-for-byte (function source is stored verbatim in \code{pg\_proc}), leaving a
+clean object diff---while an independent write-versus-audit canary and a DDL event trigger
+still reveal the gap. We further demonstrate a \code{current\_setting}-gated dormant bypass
+and, under a broad \code{INSERT} grant, fabricated back-dated audit rows indistinguishable
+from genuine ones using the audit table alone. The individual primitives are known---%
+CVE-2018-1058 \code{search\_path} shadowing and the \code{SECURITY DEFINER} escalation
+class---and we cite them as such; our contribution is their composition into a
+\emph{self-defeating-audit} threat model at application privilege, an executed defense
+evaluation, and a reproducible artifact. We confirm the threat is a cross-engine class on
+the MySQL family (MariaDB 10.6/10.11) and SQL Server (2025/v17): the name-resolution
+shadowing class transfers to neither, but trigger-replacement, dormant bypass, and
+attribution poisoning do. MySQL's \code{DEFINER}-privilege binding makes blinding more
+detectable, whereas SQL Server, like PostgreSQL, allows byte-perfect restore and
+additionally exposes a zero-residue \code{DISABLE TRIGGER} primitive its own DDL-trigger
+defense does not catch.
+\end{abstract}
+
+\section{Introduction}
+Database audit trails underpin incident response, insider-threat investigation, and
+regulatory compliance. A pervasive folk design---reproduced across countless deployments
+from the PostgreSQL wiki ``audit trigger'' recipe---captures every write with a row-level
+trigger that serialises the changed row into an append-oriented audit table. Its appeal is
+that it lives \emph{inside} the database, close to the data, and needs no external
+infrastructure.
+
+The security literature on defeating such trails is almost entirely written from the
+perspective of a \emph{privileged} adversary: a database administrator, a compromised
+superuser, or an insider who has escalated to administrative rights and simply disables
+logging or edits the log files~\cite{memtracedb}. That threat model is important but
+incomplete. The most common way an application database is actually attacked is SQL
+injection, which grants the attacker exactly the \emph{application role's} privileges---no
+more. This paper asks whether that low-privilege foothold is already sufficient to subvert
+the in-database auditor that is supposed to be recording the attack.
+
+We answer empirically, with a reproducible lab, separating what is known from what is new.
+We contribute: (1)~a \textbf{threat-model inversion}---reversible auditor-blinding and
+attribution poisoning by the \emph{auditee} at application privilege against an
+\emph{unaudited} auditor, a setting the privileged-adversary literature does not cover;
+(2)~an \textbf{empirical feasibility matrix} on stock PostgreSQL 14 and 16, pinned to the
+exact version and \code{public}-schema ACL under which each result holds---the
+``structural on stock defaults'' outcome survives only for PostgreSQL~$\leq$14;
+(3)~a \textbf{precise reversibility result}---because \code{pg\_proc.prosrc} stores source
+verbatim, a naive semantically-equivalent restore is detectable but a capture-and-replay
+restore is byte-identical and defeats object-diffing; (4)~two under-explored composition
+elements---a \code{current\_setting}-gated dormant bypass and in-database attribution
+poisoning; (5)~an \textbf{executed} defense $\times$ attack evaluation; and
+(6)~a \textbf{cross-engine} generalisation to the MySQL family and SQL Server. We do not
+claim the underlying primitives as novel; they are CVE-2018-1058 and the \code{SECURITY
+DEFINER} \code{search\_path} escalation class, and we position against them throughout.
+
+\section{Threat model}
+The adversary is the \emph{application role}, reached via SQL injection into an application
+that connects as that role. It can issue \code{SELECT/INSERT/UPDATE/DELETE} on the business
+tables plus any DDL it is (mis)granted, and has: no superuser and cannot become one; no OS
+access (cannot touch log files, config, or the data directory); and no rights over the
+audit schema or its objects, except where a specific experiment models a common operator
+misconfiguration (stated explicitly). The defender is a DBA who set up trigger-based
+auditing following common guidance and inspects the database for tampering (object diffs,
+row counts) but does not necessarily run engine-level or out-of-engine logging. The
+security goal is audit \emph{integrity} and \emph{attribution}.
+
+\section{Background and related work}
+\paragraph{\code{search\_path} and CVE-2018-1058.}
+PostgreSQL resolves unqualified names against the schemas on \code{search\_path}, with
+\code{pg\_catalog} searched implicitly first unless placed explicitly. CVE-2018-1058
+\cite{pgsec2018,pgcommit2018,pgwiki2018} established that ``adding a schema to
+\code{search\_path} effectively trusts all users having \code{CREATE} privilege on that
+schema.'' Canonical mitigations are to schema-qualify calls, pin \code{search\_path}
+(including to empty via \code{set\_config}), and \code{REVOKE CREATE ON SCHEMA public FROM
+PUBLIC}---the last became the default ACL in PostgreSQL~15. Our vectors~1A/1B are instances
+of this class; we cite it as prior art and measure exactly when it does and does not yield
+audit-blinding.
+
+\paragraph{\code{SECURITY DEFINER} functions.}
+A \code{SECURITY DEFINER} function executes with its owner's privileges. This is
+\emph{necessary} for a trigger-based auditor: a low-privilege writer must cause an insert
+into a privileged audit table. The same feature is a documented escalation surface: an
+unpinned \code{SECURITY DEFINER} function resolving an unqualified name to an
+attacker-planted object runs it with the owner's privileges~\cite{cybertec,pgcommit2018}.
+
+\paragraph{Anti-forensics assumes a privileged adversary.}
+Prior work on defeating database audit consistently assumes an administrative adversary.
+MemTraceDB~\cite{memtracedb} states its attacker ``has gained privileged access\ldots{} a
+malicious insider or an external threat actor who has escalated their credentials to an
+administrative level,'' and blinds by disabling logging or editing log files. We are not
+aware of prior work evaluating reversible blinding of an unaudited trigger-based auditor by
+a low-privilege, injection-only role.
+
+\paragraph{Tamper-evident logging.}
+That an unaudited log is tamperable is textbook: a tamper-evident log ``requires frequent
+auditing'' by ``at least one auditor\ldots{} assumed to be incorruptible''~\cite{crosby2009}.
+Append-only storage is necessary but not sufficient without cryptographic tamper-evidence
+(hash-chaining or signatures)~\cite{schneier1998,rfc6962}.
+
+\section{The victim}
+We build the representative victim as the DBA. A business schema \code{app} owned by the
+application role holds \code{app.accounts}. A separate \code{audit} schema owned by the DBA
+holds \code{audit.logged\_actions}. The trigger function is:
+\begin{lstlisting}
+CREATE FUNCTION audit.if_modified()
+RETURNS trigger AS $$
+DECLARE payload jsonb;
+BEGIN
+  IF (TG_OP='DELETE') THEN
+    payload := row_to_json(OLD)::jsonb;
+  ELSE
+    payload := row_to_json(NEW)::jsonb;
+  END IF;
+  INSERT INTO audit.logged_actions(
+    table_name,action,row_data)
+  VALUES(TG_TABLE_NAME,left(TG_OP,1),payload);
+  RETURN COALESCE(NEW,OLD);
+END; $$ LANGUAGE plpgsql SECURITY DEFINER;
+\end{lstlisting}
+fired \code{AFTER INSERT OR UPDATE OR DELETE \ldots FOR EACH ROW}. The application role is
+granted only \code{USAGE} on \code{app} and DML on \code{app.accounts}. One faithful
+correction to the naive wiki snippet: the function \emph{must} be \code{SECURITY DEFINER},
+else a low-privilege writer's own trigger-driven insert into the audit table fails with a
+permission error rather than auditing---and it is exactly this
+\code{SECURITY DEFINER}-with-mutable-\code{search\_path} shape that is the CVE-2018-1058
+surface.
+
+\section{Methodology}
+We run each cell in a disposable Docker container (\code{postgres:14-alpine},
+\code{postgres:16-alpine}; image digests recorded) against a freshly built victim, and
+\emph{normalise} three preconditions to a known state so results are comparable across
+versions: \code{pub\_create} (does \code{PUBLIC} hold \code{CREATE} on \code{public}),
+\code{pin\_path} (is the trigger's \code{search\_path} pinned), \code{app\_owns} (does the
+app role own/ALTER the audit function). Separately we record the \emph{true stock default}
+per version by probing a fresh database with a fresh low-privilege role. Blinding is
+measured \emph{out of band}: each attack plants a uniquely-named sentinel write, and the
+DBA counts whether it reached the audit table---the ground truth of whether auditing
+occurred, independent of whether the attack's setup statements succeeded. All identities
+and addresses are synthetic (RFC~5737 documentation ranges~\cite{rfc5737}).
+
+\section{Results}
+\subsection{Feasibility matrix (RQ1)}
+Behaviour is identical on PostgreSQL 14 and 16 at the mechanism level; the difference is in
+what counts as ``stock.''
+\begin{table}[h]\centering\footnotesize
+\begin{tabularx}{\columnwidth}{@{}l c Y@{}}
+\toprule
+Vector & Blinds? & Precondition it truly needs \\
+\midrule
+1A plain catalog shadow & No & \code{pg\_catalog} resolved first; app cannot \code{CREATE SCHEMA} without \code{CREATE}-on-db \\
+1B exact composite overload & \textbf{Yes} & writable \code{public} \emph{and} unpinned trigger \code{search\_path} \\
+1C replace trigger fn body & \textbf{Yes} & app owns / can \code{ALTER} the audit fn \\
+1D bespoke secdef helper & N/A & none beyond the built-ins of 1A/1B \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+The decisive, verified version nuance: on stock PostgreSQL~14 a fresh low-privilege role
+\emph{can} \code{CREATE} in \code{public} (ACL grants \code{PUBLIC} \code{USAGE+CREATE}), so
+1B is reachable on defaults; on stock 15+/16 \code{PUBLIC} has only \code{USAGE}, so 1B
+needs an explicit re-grant or another writable schema on the function's path. Plain catalog
+shadowing (1A) never blinds---the exact-overload specificity in 1B is what beats
+\code{pg\_catalog}'s search-order priority.
+
+\subsection{Reversibility (RQ2)}
+In 1C the attacker captures the exact original definition (\code{pg\_proc.prosrc} is
+world-readable and stored \emph{verbatim}), replaces the body with a no-op to drop one
+write, then replays the captured definition byte-for-byte: \code{pg\_get\_functiondef} is
+identical before and after, so a source/object diff finds nothing. A naive
+semantically-equivalent restore does \emph{not} match. What still betrays a perfect restore
+is \emph{independent} of the audit code: a write-versus-audit canary shows a gap of one, and
+a DDL event trigger recorded two \code{CREATE OR REPLACE FUNCTION} events. Object-diffing the
+audit code is therefore insufficient on its own.
+
+\subsection{Dormant bypass (RQ3) and attribution poisoning (RQ4)}
+Given the 1C ownership precondition, a \code{current\_setting('app.maint')}-gated branch
+skips logging only in a session that sets the flag: the gated write is not logged while a
+control write in the same session is. Given a broad \code{INSERT} grant, the app role writes
+a fabricated row---non-existent user, synthetic documentation IP, back-dated three days---%
+schema-identical to genuine rows; a reviewer using only the audit table has no field that
+flags it as forged. Exposure requires cross-layer correlation with an app-side log.
+
+\subsection{Cross-engine generalisation}
+We reproduced the study on the MySQL family (MariaDB 10.6/10.11) and SQL Server
+(LocalDB, 2025/v17). The composition transfers to all three; the surface and reversibility
+differ (Table~\ref{tab:cross}). The shadowing class transfers to neither MySQL nor SQL
+Server (no \code{search\_path}). On MySQL, whose \code{DEFINER}-trigger model is the
+analogue, trigger replacement needs the \code{TRIGGER} privilege, but the \code{DEFINER}
+binds privilege so the attacker cannot recreate the original \code{root}-\code{DEFINER}
+trigger without \code{SET USER}/\code{SUPER}---a missing/altered trigger is an un-erasable
+residue, and dormancy additionally needs an audit-\code{INSERT} grant. On SQL Server the
+``definer'' analogue is ownership chaining; replacement needs \code{ALTER} on the table and,
+because module source is stored verbatim, the attacker restores byte-for-byte (clean diff,
+like PostgreSQL); dormancy is easy (an \code{ALTER} keeps \code{dbo} ownership so chaining
+survives). SQL Server also exposes a zero-residue \code{DISABLE TRIGGER} primitive that
+raises no DDL event, so a DDL-trigger guard catching \code{ALTER} does not catch it.
+
+\begin{table*}[t]\centering\footnotesize
+\caption{Cross-engine comparison of the self-defeating-audit threat.}
+\label{tab:cross}
+\begin{tabularx}{\textwidth}{@{}l Y Y Y@{}}
+\toprule
+Aspect & PostgreSQL (14/16) & MySQL family (MariaDB) & SQL Server (2025) \\
+\midrule
+``Definer'' mechanism & \code{SECURITY DEFINER} fn & \code{DEFINER} trigger & ownership chaining \\
+Shadow class (1A/1B) & blinds on stock $\leq$14 & N/A (no \code{search\_path}) & N/A (no \code{search\_path}) \\
+Replacement precondition & owns the audit fn & \code{TRIGGER} priv on table & \code{ALTER} on table \\
+Replacement (1C) & blinds; byte-perfect restore & blinds; cannot restore DEFINER (residue) & blinds; byte-perfect restore \\
+Extra blinding primitive & --- & --- & \code{DISABLE TRIGGER} (zero residue) \\
+Dormant bypass & easy & harder (needs audit-INSERT) & easy \\
+Attribution poisoning & indistinguishable & identical & identical \\
+Engine-level defense & pgaudit/\code{log\_statement} & \code{general\_log}/binlog & SQL Server Audit \\
+Detection nuance & DDL event trigger & object-diff (missing trigger) & DDL trigger misses \code{DISABLE} \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+\section{Defenses (RQ5)}
+Every defense below was executed against the live attacks, not asserted.
+\begin{table}[h]\centering\footnotesize
+\begin{tabularx}{\columnwidth}{@{}Y c c c@{}}
+\toprule
+Attack $\downarrow$ / Defense $\rightarrow$ & Pin path / REVOKE public & Ownership / priv & Engine log + hash-chain \\
+\midrule
+1B overload shadow & \textbf{stops} & --- & logs write \\
+1C replace fn/trigger & --- & \textbf{stops} & logs + detects \\
+2 dormant & --- & \textbf{stops} & logs + detects \\
+3 attribution poison & --- & --- & \textbf{exposes} (chain break) \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Key executed results: pinning the trigger \code{search\_path} turns 1B from blinded to
+logged even with \code{public} writable; correct ownership makes the app role unable to
+\code{CREATE OR REPLACE} the function, killing 1C and the dormant bypass; the DDL event
+trigger cannot be dropped by the app role and records the replacements; the hash-chained
+sink's verifier returns the tampered sequence number on a raw/back-dated insert (NULL on an
+intact chain); and engine-level \code{log\_statement} captures the write in the server log
+even while the trigger auditor is blinded---the app role can neither change the GUC
+(superuser-only) nor reach the log file. Only engine-level logging plus an out-of-engine
+tamper-evident sink closes the whole set. The same pattern holds cross-engine
+(\code{general\_log}/binlog and SQL~Server~Audit; remove the \code{TRIGGER}/\code{ALTER}
+privilege; hash-chained sink).
+
+\section{Discussion}
+\paragraph{What is and is not novel.} The primitives---\code{search\_path} shadowing
+(CVE-2018-1058) and \code{SECURITY DEFINER} escalation---are prior art and we claim neither.
+The contribution is (i)~the threat-model inversion to a low-privilege, injection-only
+auditee against an unaudited auditor; (ii)~the composition of reversible blinding, dormant
+bypass, and in-database attribution poisoning; (iii)~the verbatim-restore reversibility
+observation; (iv)~an executed cross-engine defense evaluation and reproducible artifact.
+
+\paragraph{Honest scoping.} The strongest ``works on stock defaults'' claim holds only for
+PostgreSQL~$\leq$14; on 15+ the \code{public}-schema default change makes 1B
+misconfiguration-gated. We state the version and \code{public}-schema ACL for every result.
+
+\paragraph{Limitations.} We evaluate PostgreSQL (14, 16), the MySQL family (MariaDB 10.6,
+10.11), and SQL Server (2025/v17); Oracle is future work. The SQL Server experiments run on
+LocalDB and model the low-privilege attacker via \code{EXECUTE AS USER} impersonation
+(LocalDB is Windows-auth only), which enforces that principal's permissions but is not a
+separate network session. The victim is the wiki pattern; bespoke auditors may pin
+\code{search\_path} or use engine logging already. We measure blinding of a single logical
+write, not throughput-scale evasion.
+
+\section{Responsible disclosure}
+This work was conducted entirely in disposable local labs with synthetic data and no real
+system identified. The behaviours shown are documented engine behaviour plus operator
+misconfiguration, not new engine defects; a courtesy note was sent to the PostgreSQL
+security team framed as such. The published SQL is scoped to the lab schema and is not a
+weaponised payload.
+
+\section{Reproducibility}
+The complete lab---container setup, parameterised victims, attack catalogues, defenses,
+snapshot tooling, and the orchestrators that fill the matrices---is released as an artifact
+with pinned image digests and per-version evidence logs, archived at Zenodo
+(DOI:~10.5281/zenodo.22004478) and mirrored on GitHub
+(\url{https://github.com/mthamil107/DB_Audit_Research}).
+
+\section{Conclusion}
+A SQL-injected application role, with no superuser and no OS access, can reversibly blind
+the widely-copied trigger-based auditor and poison attribution from within the
+database---under preconditions that are stock defaults on PostgreSQL~$\leq$14 and common
+misconfigurations elsewhere. The individual mechanisms are known; their composition into a
+self-defeating audit at application privilege is not addressed by existing anti-forensics
+work, which assumes a privileged adversary. The remedy is unambiguous: do not trust an
+in-engine trigger log as tamper-proof against the role it audits---pin \code{search\_path},
+revoke \code{CREATE} on \code{public}, own audit objects with a role the application can
+never alter, and record at the engine into an out-of-engine, hash-chained, append-only sink.
+
+\begin{thebibliography}{9}
+\bibitem{pgsec2018} PostgreSQL Global Development Group. \emph{CVE-2018-1058}.
+\url{https://www.postgresql.org/support/security/CVE-2018-1058/}
+\bibitem{pgcommit2018} PostgreSQL. Documentation commit on \code{search\_path} trust
+(CVE-2018-1058 fix). \url{https://github.com/postgres/postgres/commit/5770172cb0c9df9e6ce27c507b449557e5b45124}
+\bibitem{pgwiki2018} PostgreSQL Wiki. \emph{A Guide to CVE-2018-1058: Protect Your Search Path}.
+\url{https://wiki.postgresql.org/wiki/A_Guide_to_CVE-2018-1058}
+\bibitem{cybertec} Cybertec. \emph{Abusing SECURITY DEFINER functions}.
+\url{https://www.cybertec-postgresql.com/en/abusing-security-definer-functions/}
+\bibitem{memtracedb} \emph{MemTraceDB}. arXiv:2509.05891.
+\url{https://arxiv.org/pdf/2509.05891}
+\bibitem{crosby2009} S.~A.~Crosby and D.~S.~Wallach. \emph{Efficient Data Structures for
+Tamper-Evident Logging}. USENIX Security 2009.
+\bibitem{schneier1998} B.~Schneier and J.~Kelsey. \emph{Cryptographic Support for Secure
+Logs on Untrusted Machines}. USENIX Security 1998.
+\bibitem{rfc6962} B.~Laurie, A.~Langley, E.~Kasper. \emph{Certificate Transparency}. RFC 6962.
+\bibitem{rfc5737} J.~Arkko, M.~Cotton, L.~Vegoda. \emph{IPv4 Address Blocks Reserved for
+Documentation}. RFC 5737.
+\end{thebibliography}
+
+\end{document}
